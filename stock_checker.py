@@ -1,6 +1,7 @@
 import os
 import requests
 from bs4 import BeautifulSoup
+from datetime import datetime, timezone
 
 PRODUCTS = {
     "PS5 Disc Edition CFI-1x15A":
@@ -19,6 +20,7 @@ HEADERS = {
     )
 }
 
+
 def check_stock(url):
     response = requests.get(url, headers=HEADERS, timeout=20)
     response.raise_for_status()
@@ -33,6 +35,7 @@ def check_stock(url):
         return True
 
     return None
+
 
 def send_alert(name, url):
     message = {
@@ -51,12 +54,21 @@ def send_alert(name, url):
 
     response.raise_for_status()
 
+
+def log_restock(name, url):
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+    with open("restocks.log", "a", encoding="utf-8") as f:
+        f.write(f"{now} - IN STOCK - {name} - {url}\n")
+
+
 for name, url in PRODUCTS.items():
     try:
         status = check_stock(url)
 
         if status is True:
             print(f"IN STOCK: {name}")
+            log_restock(name, url)
             send_alert(name, url)
 
         elif status is False:
