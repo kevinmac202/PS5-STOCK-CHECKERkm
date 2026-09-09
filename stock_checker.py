@@ -1,7 +1,7 @@
 import os
+import time
 import requests
 from bs4 import BeautifulSoup
-from datetime import datetime, timezone
 
 PRODUCTS = {
     "PS5 Disc Edition CFI-1x15A":
@@ -16,16 +16,71 @@ DISCORD_WEBHOOK = os.environ["DISCORD_WEBHOOK"]
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 Chrome/131 Safari/537.36"
-    )
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/140.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-CA,en;q=0.9",
+    "Cache-Control": "no-cache",
+    "Pragma": "no-cache",
 }
+
+def send_discord(message):
+    r = requests.post(
+        DISCORD_WEBHOOK,
+        json={"content": message},
+        timeout=15
+    )
+    r.raise_for_status()
+
+
+def fetch_with_retries(url, retries=6):
+    last_error = None
+
+    for attempt in range(1, retries + 1):
+        try:
+            session = requests.Session()
+
+            response = session.get(
+                url,
+                headers=HEADERS,
+                timeout=15
+            )
+
+            if response.status_code == 200:
+                return response.text
+
+            if response.status_code in {500, 502, 503, 504}:
+                print(
+                    f"Server error {response.status_code}, "
+                    f"attempt {attempt}/{retries}"
+                )
+
+                last_error = Exception(
+                    f"HTTP {response.status_code}"
+                )
+
+                time.sleep(5)
+                continue
+
+            response.raise_for_status()
+
+        except requests.RequestException as e:
+            last_error = e
+
+            print(
+                f"Request failed, attempt {attempt}/{retries}: {e}"
+            )
+
+            time.sleep(5)
+
+    raise last_error
 
 
 def check_stock(url):
-    response = requests.get(url, headers=HEADERS, timeout=20)
-    response.raise_for_status()
+    html = fetch_with_retries(url)
 
-    soup = BeautifulSoup(response.text, "html.parser")
+    soup = BeautifulSoup(html, "html.parser")
     text = soup.get_text(" ", strip=True).lower()
 
     if "out of stock" in text:
@@ -37,45 +92,41 @@ def check_stock(url):
     return None
 
 
-def send_alert(name, url):
-    message = {
-        "content": (
-            f"🚨 **PS5 STOCK ALERT** 🚨\n\n"
-            f"**{name} appears to be IN STOCK!**\n\n"
-            f"{url}"
-        )
-    }
-
-    response = requests.post(
-        DISCORD_WEBHOOK,
-        json=message,
-        timeout=20
-    )
-
-    response.raise_for_status()
-
-
-def log_restock(name, url):
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-
-    with open("restocks.log", "a", encoding="utf-8") as f:
-        f.write(f"{now} - IN STOCK - {name} - {url}\n")
-
-
 for name, url in PRODUCTS.items():
+
     try:
         status = check_stock(url)
 
         if status is True:
             print(f"IN STOCK: {name}")
-            log_restock(name, url)
-            send_alert(name, url)
+
+            send_discord(
+                f"🚨🚨 **PS5 IN STOCK** 🚨🚨\n\n"
+                f"**{name}**\n"
+                f"{url}\n\n"
+                f"BUY NOW"
+            )
 
         elif status is False:
             print(f"Out of stock: {name}")
 
         else:
-            print(f"Could not determine status: {name}")
+            print(f"Unknown stock status: {name}")
+
+            send_discord(
+                f"⚠️ **PS5 checker could not determine stock status**\n\n"
+                f"{name}\n"
+                f"{url}\n\n"
+                f"Check the page manually."
+            )
 
     except Exception as e:
-        print(f"Error checking {name}: {e}")
+        print(f"FAILED: {name}: {e}")
+
+        send_discord(
+            f"🔥 **MTC PS5 PAGE IS ERRORING** 🔥\n\n"
+            f"{name}\n"
+            f"The site returned errors after repeated retries.\n\n"
+            f"This can happen during heavy traffic/restocks.\n"
+            f"CHECK MANUALLY NOW:\n{url}"
+        )
